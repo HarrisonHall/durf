@@ -4,16 +4,86 @@
 
 use std::{rc::Rc, sync::Arc};
 
+use scraper::Element;
+use serde::{Deserialize, Serialize};
 use tracing::field::DisplayValue;
 
 /// A parsed AST representing a document.
 #[allow(unused)]
-struct Ast {
-    root: RawNode,
+#[derive(Clone, Debug)]
+pub struct Ast {
+    pub root: Node,
+}
+
+impl Ast {
+    pub fn minimize(&mut self) {
+        self.root.minimize();
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParseFlags {
+    pub allow: Vec<ParseRule>,
+    pub skip: Vec<ParseRule>,
+    pub parsing: bool,
+    pub remaining_depth: usize,
+}
+
+impl Default for ParseFlags {
+    fn default() -> Self {
+        Self {
+            allow: Vec::new(),
+            skip: Vec::new(),
+            parsing: true,
+            remaining_depth: 10,
+        }
+    }
+}
+
+impl ParseFlags {
+    fn should_parse(&self, elem: &scraper::ElementRef) -> bool {
+        self.allow.iter().any(|r| r.matches(elem))
+    }
+
+    fn should_skip(&self, elem: &scraper::ElementRef) -> bool {
+        self.skip.iter().any(|r| r.matches(elem))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ParseRule {
+    #[serde(alias = "element")]
+    Element(String),
+    #[serde(alias = "class")]
+    Class(String),
+}
+
+impl ParseRule {
+    pub fn from_element(elem: impl Into<String>) -> Self {
+        Self::Element(elem.into())
+    }
+
+    pub fn from_class(class: impl Into<String>) -> Self {
+        Self::Class(class.into())
+    }
+
+    fn matches(&self, elem: &scraper::ElementRef) -> bool {
+        match &self {
+            &ParseRule::Element(e) => {
+                let ele_name = elem.value().name.local.to_lowercase();
+                ele_name == *e
+            }
+            &ParseRule::Class(c) => elem
+                .value()
+                .has_class(c.as_str(), scraper::CaseSensitivity::AsciiCaseInsensitive),
+        }
+    }
 }
 
 /// A node in an AST.
-enum RawNode {
+#[derive(Clone, Debug)]
+pub enum RawNode {
+    Empty,
     Section(Section),
     Text(Text),
 }
@@ -31,8 +101,8 @@ impl From<Text> for RawNode {
 }
 
 impl RawNode {
-    fn from_element_ref(ele: &scraper::ElementRef) -> Result<Self, Error> {
-        Self::from_element_ref_internal(ele, 10)
+    fn from_element_ref(ele: &scraper::ElementRef, flags: &mut ParseFlags) -> Result<Self, Error> {
+        Self::from_element_ref_internal(ele, flags)
     }
 
     fn from_node_ref_text(// node: &scraper::node::Doctype
@@ -42,12 +112,12 @@ impl RawNode {
 
     fn from_element_ref_text(
         ele: &scraper::ElementRef,
-        remaining_depth: usize,
+        flags: &mut ParseFlags,
     ) -> Result<Text, Error> {
         let ele_name = ele.value().name.local.to_ascii_lowercase();
-        tracing::info!("Depth: {remaining_depth} {ele_name}");
+        tracing::trace!("Depth: {} {ele_name}", flags.remaining_depth);
         // Do not exceed depth.
-        if remaining_depth == 0 {
+        if flags.remaining_depth == 0 {
             return Err(Error::DepthExceeded);
         }
 
@@ -55,7 +125,6 @@ impl RawNode {
         let mut text = Text::new();
 
         // Check special cases.
-        let ele_name = ele.value().name.local.to_ascii_lowercase();
         match ele_name.as_ref() {
             "br" | "hr" => {
                 return Ok(Text::from_fragment("\n"));
@@ -70,14 +139,18 @@ impl RawNode {
 
             // Parse child elements.
             if let Some(sub_ele_ref) = scraper::ElementRef::wrap(node_ref) {
-                if let Ok(sub_text) = Self::from_element_ref_text(&sub_ele_ref, remaining_depth - 1)
-                {
+                flags.remaining_depth -= 1;
+                if let Ok(sub_text) = Self::from_element_ref_text(&sub_ele_ref, flags) {
                     text.extend(sub_text);
                 }
+                flags.remaining_depth += 1;
             }
 
             // Parse text nodes.
             if let Some(node_text) = node.as_text() {
+                let mut minimized_text: String = node_text.to_string();
+                minimized_text = minimized_text.replace("\n", "");
+                // TODO: Better string minimization.
                 text.append(TextFragment::from(node_text.as_ref()));
             }
         }
@@ -121,54 +194,84 @@ impl RawNode {
     }
 
     fn from_element_ref_internal(
-        ele: &scraper::ElementRef,
-        remaining_depth: usize,
+        elem: &scraper::ElementRef,
+        flags: &mut ParseFlags,
     ) -> Result<Self, Error> {
         // Do not exceed depth.
-        if remaining_depth == 0 {
+        if flags.remaining_depth == 0 {
             return Err(Error::DepthExceeded);
         }
 
+        let mut toggled_parsing = false;
+        if !flags.parsing {
+            if flags.should_parse(elem) {
+                toggled_parsing = true;
+                flags.parsing = true;
+            }
+        }
+        if flags.should_skip(elem) {
+            return Ok(Self::Empty);
+        }
+
         // Match on element name.
-        let ele_name = ele.value().name.local.to_ascii_lowercase();
-        tracing::info!("Tag {ele_name}");
-        match ele_name.as_ref() {
+        let ele_name = elem.value().name.local.to_ascii_lowercase();
+        tracing::trace!("Tag {ele_name}");
+        let parsed: Result<Self, Error> = match ele_name.as_ref() {
             // TODO: Parse head as meta!
             "html" | "header" | "footer" | "body" | "div" | "section" | "article" | "main"
             | "nav" => {
                 let mut section = Section::new_set();
-                for child in ele.child_elements() {
-                    match RawNode::from_element_ref_internal(&child, remaining_depth - 1) {
+                for child in elem.child_elements() {
+                    flags.remaining_depth -= 1;
+                    match RawNode::from_element_ref_internal(&child, flags) {
                         Ok(parsed_child) => section.nodes.push(parsed_child.into()),
                         Err(e) => {
-                            tracing::warn!("Failed to parse child: {e:?}");
+                            tracing::debug!("Failed to parse child: {e:?}");
                         }
                     }
+                    flags.remaining_depth += 1;
                 }
-                return Ok(section.into());
+                Ok(section.into())
             }
             "menu" | "ul" => {
                 let mut section = Section::new_list();
-                for child in ele.child_elements() {
-                    match RawNode::from_element_ref_internal(&child, remaining_depth - 1) {
+                for child in elem.child_elements() {
+                    flags.remaining_depth -= 1;
+                    match RawNode::from_element_ref_internal(&child, flags) {
                         Ok(parsed_child) => section.nodes.push(parsed_child.into()),
                         Err(e) => {
-                            tracing::warn!("Failed to parse child: {e:?}");
+                            tracing::debug!("Failed to parse child: {e:?}");
                         }
                     }
+                    flags.remaining_depth += 1;
                 }
-                return Ok(section.into());
+                Ok(section.into())
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "a" | "span" | "strong" | "em"
             | "i" | "s" | "u" | "blockquote" | "q" | "hr" | "br" | "pre" | "code" => {
-                return Ok(Self::from_element_ref_text(ele, remaining_depth - 1)?.into());
+                if flags.parsing {
+                    flags.remaining_depth -= 1;
+                    let res = match Self::from_element_ref_text(elem, flags) {
+                        Ok(t) => Ok(t.into()),
+                        Err(e) => Err(e),
+                    };
+                    flags.remaining_depth += 1;
+                    res
+                } else {
+                    Ok(RawNode::Empty)
+                }
             }
             _ => {
-                tracing::warn!("Unsupported element: {}", ele_name,);
+                tracing::debug!("Unsupported element: {}", ele_name,);
 
                 Err(Error::Todo)
             }
+        };
+
+        if toggled_parsing {
+            flags.parsing = false;
         }
+        parsed
     }
 
     fn export_string(&self, f: &mut std::fmt::Formatter<'_>, depth: usize) -> std::fmt::Result {
@@ -176,6 +279,7 @@ impl RawNode {
             write!(f, " ")?;
         }
         match self {
+            Self::Empty => {}
             Self::Section(section) => {
                 write!(f, "Section\n");
                 for child in &section.nodes {
@@ -192,10 +296,18 @@ impl RawNode {
 
     fn minimize(&mut self) {
         match self {
+            Self::Empty => {}
             Self::Section(section) => {
                 if section.nodes.len() == 0 {
                     return;
                 }
+
+                // Remove empty sections.
+                section.nodes.retain(|n| match &**n {
+                    RawNode::Empty => false,
+                    RawNode::Section(s) => !s.is_empty(),
+                    RawNode::Text(_) => true,
+                });
 
                 // Minimize nodes.
                 for node in &mut section.nodes {
@@ -204,8 +316,9 @@ impl RawNode {
 
                 // Remove empty sections.
                 section.nodes.retain(|n| match &**n {
+                    RawNode::Empty => false,
                     RawNode::Section(s) => !s.is_empty(),
-                    _ => true,
+                    RawNode::Text(_) => true,
                 });
 
                 // Collapse subsection.
@@ -218,15 +331,21 @@ impl RawNode {
                 }
             }
             Self::Text(text) => {
+                text.clean();
                 // text.text = text.text.trim().into();
             }
         }
     }
 }
 
-struct Node(Box<RawNode>);
+#[derive(Clone, Debug)]
+pub struct Node(Box<RawNode>);
 
-impl Node {}
+impl Node {
+    fn new(raw_node: RawNode) -> Self {
+        Self(Box::new(raw_node))
+    }
+}
 
 impl std::ops::Deref for Node {
     type Target = RawNode;
@@ -247,34 +366,35 @@ impl From<RawNode> for Node {
     }
 }
 
-struct Section {
-    nodes: Vec<Node>,
+#[derive(Clone, Debug)]
+pub struct Section {
+    pub nodes: Vec<Node>,
     ordering: SectionOrdering,
 }
 
 impl Section {
-    fn new_set() -> Self {
+    pub fn new_set() -> Self {
         Self {
             nodes: Vec::new(),
             ordering: SectionOrdering::Set,
         }
     }
 
-    fn new_list() -> Self {
+    pub fn new_list() -> Self {
         Self {
             nodes: Vec::new(),
             ordering: SectionOrdering::List,
         }
     }
 
-    fn new_enumeration() -> Self {
+    pub fn new_enumeration() -> Self {
         Self {
             nodes: Vec::new(),
             ordering: SectionOrdering::Enumeration,
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         for child in &self.nodes {
             match &**child {
                 RawNode::Section(s) => {
@@ -288,10 +408,18 @@ impl Section {
 
         true
     }
+
+    pub fn nodes(&self) -> &[Node] {
+        self.nodes.as_slice()
+    }
+
+    pub fn ordering(&self) -> &SectionOrdering {
+        &self.ordering
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum SectionOrdering {
+pub enum SectionOrdering {
     /// Just items, in order.
     Set,
     /// Bulleted items.
@@ -300,12 +428,13 @@ enum SectionOrdering {
     Enumeration,
 }
 
-struct Text {
-    fragments: Vec<TextFragment>,
+#[derive(Clone, Debug)]
+pub struct Text {
+    pub fragments: Vec<TextFragment>,
 }
 
 impl Text {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             fragments: Vec::with_capacity(4),
         }
@@ -361,18 +490,28 @@ impl Text {
 
         total_formatted
     }
+
+    fn clean(&mut self) {
+        for frag in self.fragments.iter_mut() {
+            frag.text.replace("　", "");
+        }
+    }
 }
 
-struct TextFragment {
-    text: String,
-    attributes: TextAttributes,
+#[derive(Clone, Debug)]
+pub struct TextFragment {
+    pub text: String,
+    pub attributes: TextAttributes,
 }
 
 impl TextFragment {
-    fn new() -> Self {
+    pub fn new(text: impl Into<String>, attributes: Option<TextAttributes>) -> Self {
         Self {
-            text: String::with_capacity(32),
-            attributes: TextAttributes::default(),
+            text: text.into(),
+            attributes: match attributes {
+                Some(attr) => attr,
+                None => TextAttributes::default(),
+            },
         }
     }
 
@@ -381,6 +520,15 @@ impl TextFragment {
         if trimmed.len() > 0 {
             // self.text.push(' ');
             self.text.push_str(trimmed);
+        }
+    }
+}
+
+impl Default for TextFragment {
+    fn default() -> Self {
+        Self {
+            text: String::with_capacity(32),
+            attributes: TextAttributes::default(),
         }
     }
 }
@@ -400,17 +548,51 @@ impl AsRef<str> for TextFragment {
     }
 }
 
-struct TextAttributes {
-    preformatted: bool,
-    italic: bool,
-    bold: bool,
-    heading: Option<u8>,
-    link: Option<String>,
+/// Attributes for a text fragment.
+#[derive(Clone, Debug)]
+pub struct TextAttributes {
+    /// Preformatted, code, or mono font.
+    pub preformatted: bool,
+    /// Italic font.
+    pub italic: bool,
+    /// Bold font.
+    pub bold: bool,
+    /// Heading value: None, 1-6.
+    pub heading: Option<u8>,
+    /// A link/reference.
+    pub link: Option<String>,
+    /// An annotated tooltip.
+    pub tooltip: Option<String>,
+    /// A text annotation.
+    pub annotation: Option<String>,
 }
 
 impl TextAttributes {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn is_plain(&self) -> bool {
+        if self.preformatted {
+            return false;
+        }
+        if self.bold {
+            return false;
+        }
+        if self.italic {
+            return false;
+        }
+        if let Some(_) = self.heading {
+            return false;
+        }
+        if let Some(_) = self.link {
+            return false;
+        }
+        if let Some(_) = self.tooltip {
+            return false;
+        }
+
+        true
     }
 }
 
@@ -422,6 +604,8 @@ impl Default for TextAttributes {
             bold: false,
             heading: None,
             link: None,
+            tooltip: None,
+            annotation: None,
         }
     }
 }
@@ -437,12 +621,35 @@ enum MediaType {
 }
 
 impl Ast {
-    pub fn from_html(document: &str) -> Result<Ast, Error> {
+    pub fn from_html(document: &str, flags: ParseFlags) -> Result<Ast, Error> {
+        let mut flags = flags;
         let parsed_doc = scraper::Html::parse_document(document);
         let parsed_root = parsed_doc.root_element();
-        let new_root = RawNode::from_element_ref(&parsed_root)?;
+        let new_root = RawNode::from_element_ref(&parsed_root, &mut flags)?;
 
-        Ok(Ast { root: new_root })
+        Ok(Ast {
+            root: Node::new(new_root),
+        })
+    }
+
+    pub fn from_text(document: &str, flags: ParseFlags) -> Result<Ast, Error> {
+        let mut flags = flags;
+
+        let mut section = Section::new_set();
+
+        for p in document.split("\n") {
+            section
+                .nodes
+                .push(Node::new(RawNode::Text(Text::from_fragment(p))));
+        }
+
+        // let parsed_doc = scraper::Html::parse_document(document);
+        // let parsed_root = parsed_doc.root_element();
+        // let new_root = RawNode::from_element_ref(&parsed_root, &mut flags)?;
+
+        Ok(Ast {
+            root: Node::new(RawNode::Section(section)),
+        })
     }
 }
 
@@ -454,9 +661,17 @@ impl std::fmt::Display for Ast {
 }
 
 #[derive(Copy, Clone, Debug)]
-enum Error {
+pub enum Error {
     Todo,
     DepthExceeded,
+}
+
+impl std::error::Error for Error {}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DurfError {:?}", self)
+    }
 }
 
 #[cfg(test)]
@@ -625,12 +840,12 @@ mod tests {
               </body>
             </html>
         "#;
-        let ast = Ast::from_html(page);
+        let ast = Ast::from_html(page, ParseFlags::default());
         assert!(ast.is_ok());
         let mut ast = ast.unwrap();
-        tracing::info!("{ast}");
+        tracing::trace!("{ast}");
         ast.root.minimize();
-        tracing::info!("{ast}");
+        tracing::trace!("{ast}");
     }
 
     #[test_log::test]
@@ -759,11 +974,11 @@ mod tests {
 
         </body></html>
         "#;
-        let ast = Ast::from_html(page);
+        let ast = Ast::from_html(page, ParseFlags::default());
         assert!(ast.is_ok());
         let mut ast = ast.unwrap();
-        tracing::info!("{ast}");
+        tracing::trace!("{ast}");
         ast.root.minimize();
-        tracing::info!("{ast}");
+        tracing::trace!("{ast}");
     }
 }
