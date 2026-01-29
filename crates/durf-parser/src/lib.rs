@@ -2,7 +2,7 @@
 
 #![allow(unused)]
 
-use std::{rc::Rc, sync::Arc};
+use std::{ops::DerefMut, rc::Rc, sync::Arc};
 
 use scraper::Element;
 use serde::{Deserialize, Serialize};
@@ -16,16 +16,22 @@ pub struct Ast {
 }
 
 impl Ast {
+    /// Minimize the AST.
     pub fn minimize(&mut self) {
         self.root.minimize();
     }
 }
 
+/// Flags to adjust parsing behavior.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParseFlags {
+    /// Nodes that are allowed to be parsed.
     pub allow: Vec<ParseRule>,
+    /// Nodes that are skipped with descendents.
     pub skip: Vec<ParseRule>,
+    /// Whether or not the parsing condition is set.
     pub parsing: bool,
+    /// Remaining depth for the parse.
     pub remaining_depth: usize,
 }
 
@@ -50,6 +56,37 @@ impl ParseFlags {
     }
 }
 
+/// Simply recusion with guard for parse flags.
+struct DepthGuard<'a>(&'a mut ParseFlags);
+
+impl<'a> DepthGuard<'a> {
+    fn new(flags: &'a mut ParseFlags) -> Self {
+        flags.remaining_depth = flags.remaining_depth.saturating_sub(1);
+        Self(flags)
+    }
+}
+
+impl<'a> Drop for DepthGuard<'a> {
+    fn drop(&mut self) {
+        self.remaining_depth = self.remaining_depth.saturating_add(1);
+    }
+}
+
+impl<'a> std::ops::Deref for DepthGuard<'a> {
+    type Target = ParseFlags;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<'a> std::ops::DerefMut for DepthGuard<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+/// A rule for matching elements.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ParseRule {
     #[serde(alias = "element")]
@@ -59,14 +96,17 @@ pub enum ParseRule {
 }
 
 impl ParseRule {
+    /// Create a parse rule from an element.
     pub fn from_element(elem: impl Into<String>) -> Self {
         Self::Element(elem.into())
     }
 
+    /// Create a parse rule from a class.
     pub fn from_class(class: impl Into<String>) -> Self {
         Self::Class(class.into())
     }
 
+    /// Check if parse rule matches element.
     fn matches(&self, elem: &scraper::ElementRef) -> bool {
         match &self {
             &ParseRule::Element(e) => {
@@ -80,7 +120,7 @@ impl ParseRule {
     }
 }
 
-/// A node in an AST.
+/// A node in the durf AST.
 #[derive(Clone, Debug)]
 pub enum RawNode {
     Empty,
@@ -115,11 +155,14 @@ impl RawNode {
         flags: &mut ParseFlags,
     ) -> Result<Text, Error> {
         let ele_name = ele.value().name.local.to_ascii_lowercase();
-        tracing::trace!("Depth: {} {ele_name}", flags.remaining_depth);
+
         // Do not exceed depth.
+        tracing::trace!("Depth: {} {ele_name}", flags.remaining_depth);
         if flags.remaining_depth == 0 {
             return Err(Error::DepthExceeded);
         }
+
+        let mut flags = DepthGuard::new(flags);
 
         // Combine children of text element into single text.
         let mut text = Text::new();
@@ -128,6 +171,9 @@ impl RawNode {
         match ele_name.as_ref() {
             "br" | "hr" => {
                 return Ok(Text::from_fragment("\n"));
+            }
+            "rp" => {
+                return Ok(Text::new_empty());
             }
             _ => {}
         }
@@ -139,11 +185,9 @@ impl RawNode {
 
             // Parse child elements.
             if let Some(sub_ele_ref) = scraper::ElementRef::wrap(node_ref) {
-                flags.remaining_depth -= 1;
-                if let Ok(sub_text) = Self::from_element_ref_text(&sub_ele_ref, flags) {
+                if let Ok(sub_text) = Self::from_element_ref_text(&sub_ele_ref, flags.deref_mut()) {
                     text.extend(sub_text);
                 }
-                flags.remaining_depth += 1;
             }
 
             // Parse text nodes.
@@ -155,7 +199,26 @@ impl RawNode {
             }
         }
 
-        // Modify fragments according to element.
+        // For certain elements, we have special handling:
+        match ele_name.as_ref() {
+            // Ruby will combine and wrap children:
+            "ruby" => {
+                text.combine_fragments();
+                return Ok(text);
+            }
+            // <rt> is an annotation, only.
+            "rt" => {
+                text.combine_fragments();
+                if let Some(frag) = text.fragments.first_mut() {
+                    frag.attributes.annotation = Some(frag.text.clone());
+                    frag.text.clear();
+                }
+                return Ok(text);
+            }
+            _ => {}
+        }
+
+        // Modify child fragments according to element.
         for frag in &mut text.fragments {
             match ele_name.as_ref() {
                 "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
@@ -186,7 +249,9 @@ impl RawNode {
                 "blockquote" | "q" | "pre" | "code" => {
                     frag.attributes.preformatted = true;
                 }
-                _ => {}
+                _ => {
+                    tracing::debug!("Unsupported text element: {}", ele_name.as_ref());
+                }
             }
         }
 
@@ -201,6 +266,8 @@ impl RawNode {
         if flags.remaining_depth == 0 {
             return Err(Error::DepthExceeded);
         }
+
+        let mut flags = DepthGuard::new(flags);
 
         let mut toggled_parsing = false;
         if !flags.parsing {
@@ -222,40 +289,34 @@ impl RawNode {
             | "nav" => {
                 let mut section = Section::new_set();
                 for child in elem.child_elements() {
-                    flags.remaining_depth -= 1;
-                    match RawNode::from_element_ref_internal(&child, flags) {
+                    match RawNode::from_element_ref_internal(&child, flags.deref_mut()) {
                         Ok(parsed_child) => section.nodes.push(parsed_child.into()),
                         Err(e) => {
                             tracing::debug!("Failed to parse child: {e:?}");
                         }
                     }
-                    flags.remaining_depth += 1;
                 }
                 Ok(section.into())
             }
             "menu" | "ul" => {
                 let mut section = Section::new_list();
                 for child in elem.child_elements() {
-                    flags.remaining_depth -= 1;
-                    match RawNode::from_element_ref_internal(&child, flags) {
+                    match RawNode::from_element_ref_internal(&child, flags.deref_mut()) {
                         Ok(parsed_child) => section.nodes.push(parsed_child.into()),
                         Err(e) => {
                             tracing::debug!("Failed to parse child: {e:?}");
                         }
                     }
-                    flags.remaining_depth += 1;
                 }
                 Ok(section.into())
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "a" | "span" | "strong" | "em"
             | "i" | "s" | "u" | "blockquote" | "q" | "hr" | "br" | "pre" | "code" => {
                 if flags.parsing {
-                    flags.remaining_depth -= 1;
-                    let res = match Self::from_element_ref_text(elem, flags) {
+                    let res = match Self::from_element_ref_text(elem, flags.deref_mut()) {
                         Ok(t) => Ok(t.into()),
                         Err(e) => Err(e),
                     };
-                    flags.remaining_depth += 1;
                     res
                 } else {
                     Ok(RawNode::Empty)
@@ -440,10 +501,36 @@ impl Text {
         }
     }
 
+    pub fn new_empty() -> Self {
+        Self {
+            fragments: Vec::with_capacity(0),
+        }
+    }
+
     fn from_fragment(frag: &str) -> Self {
         Self {
             fragments: vec![frag.into()],
         }
+    }
+
+    /// Combine fragments, removing attributes.
+    fn combine_fragments(&mut self) {
+        // TODO: Handle combining additional attributes.
+        let mut attributes = TextAttributes::new();
+        let mut text = String::new();
+        let mut annotation = String::new();
+        for frag in self.fragments.iter() {
+            text += frag.as_ref();
+            annotation += match &frag.attributes.annotation {
+                Some(a) => a.as_str(),
+                None => "",
+            };
+        }
+        if !annotation.is_empty() {
+            attributes.annotation = Some(annotation);
+        }
+        let mut frag = TextFragment::new(text, Some(attributes));
+        self.fragments = vec![frag];
     }
 
     fn append(&mut self, frag: TextFragment) {
@@ -479,6 +566,9 @@ impl Text {
                     formatted
                 );
             }
+            if let Some(annotation) = &frag.attributes.annotation {
+                formatted = format!("{}({})", formatted, annotation);
+            }
 
             if total_formatted.len() > 0 {
                 // total_formatted = format!("{total_formatted} {formatted}");
@@ -492,6 +582,7 @@ impl Text {
     }
 
     fn clean(&mut self) {
+        // TODO: Remove?
         for frag in self.fragments.iter_mut() {
             frag.text.replace("　", "");
         }
@@ -973,6 +1064,91 @@ mod tests {
   
 
         </body></html>
+        "#;
+        let ast = Ast::from_html(page, ParseFlags::default());
+        assert!(ast.is_ok());
+        let mut ast = ast.unwrap();
+        tracing::trace!("{ast}");
+        ast.root.minimize();
+        tracing::trace!("{ast}");
+    }
+
+    #[test_log::test]
+    fn parse_page_3_jp() {
+        let page = r#"
+        <article class="easy-article">
+          <div class="article-figure">
+                        <figure id="js-article-figure" class="is-show"><img src="https://news.web.nhk/news/easy/ogp/ne2026012811533/8fCtO2v6MrdvTGU7BWUUAXvbchlpXViEvlLPInyG.jpg" alt="" onerror="this.src='/news/easy/images/noimg_default_easy_m.jpg';"></figure>
+                      </div>
+
+          <h1 class="article-title">
+              29<ruby>日<rt>にち</rt></ruby>から<ruby>日本海<rt>にほんかい</rt></ruby><ruby>側<rt>がわ</rt></ruby>などでまた<ruby>雪<rt>ゆき</rt></ruby>がたくさん<ruby>降<rt>ふ</rt></ruby>りそう
+          </h1>
+          <p class="article-date" id="js-article-date">2026年1月28日 19時20分</p>
+          <div class="article-top-tool">
+            <div class="article-buttons">
+              <a href="" class="article-buttons__audio js-open-audio">
+                <span> ニュースを<ruby>聞<rt>き</rt></ruby>く </span>
+              </a>
+              <a href="" class="article-buttons__ruby js-toggle-ruby is-ruby --pc">
+                <ruby>漢字<rt>かんじ</rt></ruby>の<ruby>読<rt>よ</rt></ruby>み<ruby>方<rt>かた</rt></ruby>を<ruby>消<rt>け</rt></ruby>す
+              </a>
+            </div>
+
+            <a href="" class="article-buttons__ruby js-toggle-ruby is-ruby --sp">
+              <ruby>漢字<rt>かんじ</rt></ruby>の<ruby>読<rt>よ</rt></ruby>み<ruby>方<rt>かた</rt></ruby>を<ruby>消<rt>け</rt></ruby>す
+            </a>
+
+            <div class="audio-player" id="js-audio-wrapper">
+              <div id="js-audio-inner"></div>
+            </div>
+          </div>
+          <div class="article-body" id="js-article-body">
+              <p><span class="colorL"><ruby>東北地方<rt>とうほくちほう</rt></ruby></span><span class="colorB">から</span><span class="colorL"><ruby>中国地方<rt>ちゅうごくちほう</rt></ruby></span><span class="colorB">まで</span><span class="colorB">の</span><span class="colorL"><ruby>日本海<rt>にほんかい</rt></ruby></span><span class="color4"><ruby>側<rt>がわ</rt></ruby></span><span class="color4">など</span><span class="colorB">で</span><span class="colorB">、</span><span class="colorB">29</span><span class="color4"><ruby>日<rt>にち</rt></ruby></span><span class="colorB">から</span><span class="color4">また</span><span class="color4"><ruby>雪<rt>ゆき</rt></ruby></span><span class="colorB">が</span><span class="color4">たくさん</span><span class="color4"><ruby>降<rt>ふ</rt></ruby>り</span><span class="colorB">そう</span><span class="colorB">です</span><span class="colorB">。</span></p>
+<p><span class="colorC"><ruby>気象庁<rt>きしょうちょう</rt></ruby></span><span class="colorB">によると</span><span class="colorB">、</span><span class="colorB">29</span><span class="color4"><ruby>日<rt>にち</rt></ruby></span><span class="colorB">の</span><span class="color4"><ruby>夕方<rt>ゆうがた</rt></ruby></span><span class="colorB">まで</span><span class="colorB">の</span><span class="colorB">24</span><span class="color4"><ruby>時間<rt>じかん</rt></ruby></span><span class="colorB">に</span><span class="colorB">、</span><span class="colorL"><ruby>新潟県<rt>にいがたけん</rt></ruby></span><span class="colorB">と</span><span class="colorL"><ruby>北陸地方<rt>ほくりくちほう</rt></ruby></span><span class="colorB">の</span><span class="color4"><ruby>多<rt>おお</rt></ruby>い</span><span class="colorB">ところ</span><span class="colorB">で</span><span class="colorB">60</span><span class="color2">cm</span><span class="colorB">、</span><span class="colorL"><ruby>青森県<rt>あおもりけん</rt></ruby></span><span class="colorB">で</span><span class="colorB">50</span><span class="color2">cm</span><span class="colorB">、</span><span class="colorL"><ruby>近畿地方<rt>きんきちほう</rt></ruby></span><span class="colorB">で</span><span class="colorB">40</span><span class="color2">cm</span><span class="color4">ぐらい</span><span class="colorB">の</span><span class="color4"><ruby>雪<rt>ゆき</rt></ruby></span><span class="colorB">が</span><span class="color4"><ruby>降<rt>ふ</rt></ruby>る</span><span class="color3"><ruby>心配<rt>しんぱい</rt></ruby></span><span class="colorB">が</span><span class="color4">あり</span><span class="colorB">ます</span><span class="colorB">。</span><span class="color4">いつも</span><span class="colorB">は</span><span class="color4"><ruby>雪<rt>ゆき</rt></ruby></span><span class="colorB">が</span><span class="color4"><ruby>少<rt>すく</rt></ruby>ない</span><span class="colorL"><ruby>太平洋<rt>たいへいよう</rt></ruby></span><span class="color4"><ruby>側<rt>がわ</rt></ruby></span><span class="color4">でも</span><span class="color4"><ruby>雪<rt>ゆき</rt></ruby></span><span class="colorB">が</span><span class="color4"><ruby>降<rt>ふ</rt></ruby>る</span><span class="colorB">ところ</span><span class="colorB">が</span><span class="color4">あり</span><span class="colorB">そう</span><span class="colorB">です</span><span class="colorB">。</span></p>
+<p><span class="color3"><ruby>交通<rt>こうつう</rt></ruby></span><span class="colorB">が</span><span class="color4"><ruby>止<rt>と</rt></ruby>まる</span><span class="colorB">かも</span><span class="colorB">しれ</span><span class="colorB">ませ</span><span class="colorB">ん</span><span class="colorB">。</span><span class="color4"><ruby>天気<rt>てんき</rt></ruby></span><span class="colorB">や</span><span class="color3"><ruby>交通<rt>こうつう</rt></ruby></span><span class="colorB">の</span><span class="color2"><ruby>情報<rt>じょうほう</rt></ruby></span><span class="colorB">を</span><span class="color4"><ruby>見<rt>み</rt></ruby></span><span class="colorB">て</span><span class="color3">ください</span><span class="colorB">。</span><span class="color4"><ruby>雪<rt>ゆき</rt></ruby></span><span class="colorB">を</span><span class="color3"><ruby>片<rt>かた</rt></ruby>づける</span><span class="color4">とき</span><span class="colorB">の</span><span class="color3"><ruby>事故<rt>じこ</rt></ruby></span><span class="colorB">にも</span><span class="color0"><ruby>気<rt>き</rt></ruby></span><span class="color0">をつけ</span><span class="colorB">て</span><span class="color3">ください</span><span class="colorB">。</span></p>
+          </div>
+
+          <div class="article-info">
+            <div class="article-info__color">
+              <ul class="color__list">
+                <li class="--person">
+                  … <ruby>人<rt>ひと</rt></ruby>の<ruby>名前<rt>なまえ</rt></ruby>
+                </li>
+                <li class="--place">
+                  … <ruby>国<rt>くに</rt></ruby>や<ruby>県<rt>けん</rt></ruby>、<ruby>町<rt>まち</rt></ruby>、<ruby>場所<rt>ばしょ</rt></ruby>などの<ruby>名前<rt>なまえ</rt></ruby>
+                </li>
+                <li class="--group">
+                  … <ruby>会社<rt>かいしゃ</rt></ruby>やグループなどの<ruby>名前<rt>なまえ</rt></ruby>
+                </li>
+              </ul>
+              <a href="" class="color__toggle" id="js-toggle-color">ことばの<ruby>色<rt>いろ</rt></ruby>を<ruby>消<rt>け</rt></ruby>す</a>
+            </div>
+          </div>
+          <div class="article-share">
+            <div class="nhk-snsbtn" data-nhksns-disable="google" data-nhksns-description=" "></div>
+          </div>
+                    <div class="article-link" id="js-regular-news-wrapper">
+            <a href="https://news.web.nhk/newsweb/na/na-k10015037371000" class="btn btn__no-ruby" target="_blank" id="js-regular-news">NEWS WEBでよむ</a>
+          </div>
+          </article>
+        "#;
+        let ast = Ast::from_html(page, ParseFlags::default());
+        assert!(ast.is_ok());
+        let mut ast = ast.unwrap();
+        tracing::trace!("{ast}");
+        ast.root.minimize();
+        tracing::trace!("{ast}");
+    }
+
+    #[test_log::test]
+    fn parse_page_4_jp() {
+        let page = r#"
+        <div>
+            <p>Test1</p>
+            <p class="calibre3"><span xmlns="http://www.w3.org/1999/xhtml" class="kobospan" id="kobo.16.1">　そう、無敵だと信じていた〝</span><ruby><span xmlns="http://www.w3.org/1999/xhtml" class="kobospan" id="kobo.17.1">王宮城塞</span><rt>キャッスルガード</rt></ruby><span xmlns="http://www.w3.org/1999/xhtml" class="kobospan" id="kobo.18.1">〟が破られたのは、フェルドウェイからしても想定外過ぎた。慎重な性格でなかったとしても、撤退を選択するに十分な理由であろう。</span></p>
+        </div>
+        <p>Test2</p>
         "#;
         let ast = Ast::from_html(page, ParseFlags::default());
         assert!(ast.is_ok());
