@@ -1,7 +1,9 @@
 [workspace]
 members = [
-  "crates/durf-parser",
-  # "crates/durf-ratatui",
+  "crates/durf_parser",
+  "crates/durf_ratatui",
+  "crates/durf_engine",
+  "crates/durf_browser",
 ]
 resolver = "2"
 

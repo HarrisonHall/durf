@@ -1,5 +1,5 @@
 [package]
-name = "durf-ratatui"
+name = "durf_ratatui"
 description = "Ratatui widget for Durf."
 version = "0.0.1"
 edition.workspace = true
@@ -37,7 +37,7 @@ test-log = { workspace = true }
 tracing = { workspace = true }
 # tracing-subscriber = { workspace = true }
 
-durf-parser = { path = "../durf-parser" }
+durf_parser = { path = "../durf_parser", version = "0.2.0" }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
