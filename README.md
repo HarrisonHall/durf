@@ -19,6 +19,7 @@ Durf is a dumb, document parser/surfer.
   - [x] Support parse flags
   - [ ] Parse lists
   - [ ] Parse classes
+  - [ ] Parse media
 - `durf_ratatui`
   - [x] Ratatui widget
   - [x] Basic style flags

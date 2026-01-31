@@ -4,7 +4,7 @@ use color_eyre::Result;
 use crossterm::event::{self, Event, KeyCode};
 use ratatui::{DefaultTerminal, widgets::Widget};
 
-use durf_ratatui::*;
+use durf_ratatui::prelude::*;
 
 const BODY: &'static str = "
     <html>

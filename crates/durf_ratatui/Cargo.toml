@@ -1,7 +1,7 @@
 [package]
 name = "durf_ratatui"
 description = "Ratatui widget for Durf."
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 keywords.workspace = true
@@ -17,7 +17,7 @@ ratatui = { workspace = true }
 test-log = { workspace = true }
 tracing = { workspace = true }
 
-durf_parser = { path = "../durf_parser", version = "0.2.1" }
+durf_parser = { path = "../durf_parser", version = "0.2.2" }
 
 [dev-dependencies]
 color-eyre = "0.6.5"

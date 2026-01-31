@@ -1,7 +1,7 @@
 [package]
 name = "durf_parser"
 description = "Parser for the Durf AST."
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 authors.workspace = true
 keywords.workspace = true
@@ -13,7 +13,7 @@ readme.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-scraper = "0.24.0"
+scraper = "0.24"
 serde = { version = "1", features = ["derive", ]}
 
 test-log = { workspace = true }
