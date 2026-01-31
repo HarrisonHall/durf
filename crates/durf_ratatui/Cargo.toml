@@ -1,7 +1,7 @@
 [package]
 name = "durf_ratatui"
 description = "Ratatui widget for Durf."
-version = "0.0.1"
+version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 keywords.workspace = true
@@ -13,31 +13,13 @@ readme.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# chrono-tz = { version = "0.10.4", features = ["serde", "case-insensitive"] }
-# chrono-tz = { version = "0.10.4", features = ["serde"] }
-# crossterm = { version="0.28.1", features=["serde"] }
-# directories = "6.0.0"
-# humantime = "2.2.0"
-# humantime-serde = "1.1.1"
-# toml = { version = "0.9.7" }
-# html5ever = "0.35.0"
-# scraper = "0.24.0"
-
-# chrono = { workspace = true }
-# clap = { workspace = true }
-# futures = { workspace = true }
 ratatui = { workspace = true }
-# resolve-path = { workspace = true }
-# reqwest = { workspace = true }
-# serde = { workspace = true }
-# sqlx = { workspace = true }
 test-log = { workspace = true }
-# tokio = { workspace = true }
-# tokio-util = { workspace = true }
 tracing = { workspace = true }
-# tracing-subscriber = { workspace = true }
 
-durf_parser = { path = "../durf_parser", version = "0.2.0" }
+durf_parser = { path = "../durf_parser", version = "0.2.1" }
 
 [dev-dependencies]
+color-eyre = "0.6.5"
+crossterm = "0.29.0"
 tracing-subscriber = { workspace = true }

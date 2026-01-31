@@ -240,10 +240,10 @@ impl RawNode {
                         frag.attributes.link = Some(link.into());
                     }
                 }
-                "strong" | "emphasis" | "b" => {
+                "strong" | "b" => {
                     frag.attributes.bold = true;
                 }
-                "i" | "u" => {
+                "i" | "u" | "em" => {
                     frag.attributes.italic = true;
                 }
                 "blockquote" | "q" | "pre" | "code" => {
@@ -335,7 +335,7 @@ impl RawNode {
         parsed
     }
 
-    fn export_string(&self, f: &mut std::fmt::Formatter<'_>, depth: usize) -> std::fmt::Result {
+    pub fn export_string(&self, f: &mut std::fmt::Formatter<'_>, depth: usize) -> std::fmt::Result {
         for _ in 0..depth {
             write!(f, " ")?;
         }
@@ -586,6 +586,14 @@ impl Text {
         for frag in self.fragments.iter_mut() {
             frag.text.replace("　", "");
         }
+    }
+
+    pub fn collect(&self) -> String {
+        let mut total = String::new();
+        for fragment in &self.fragments {
+            total += fragment.text.as_str();
+        }
+        total
     }
 }
 
