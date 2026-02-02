@@ -27,6 +27,10 @@ run = "cargo zigbuild --package durf_browser --target x86_64-unknown-linux-gnu.2
 description = "Test the repo."
 run = "RUST_LOG=trace cargo test -- --nocapture --test-threads=1"
 
+[tasks.test-ratatui]
+description = "Test the ratatui widget."
+run = "RUST_LOG=trace cargo run --example markdown_test"
+
 [tasks.publish]
 description = "Publish the workspace."
 run = "cargo publish --workspace"

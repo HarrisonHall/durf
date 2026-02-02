@@ -12,11 +12,15 @@ pub struct DurfWidgetState {
     pub(crate) focus: usize,
     /// The entire rendered buffer.
     pub(crate) buf: ratatui::buffer::Buffer,
-    /// The last rendered total area.
+    /// The last rendered area.
     pub(crate) rendered_area: ratatui::prelude::Rect,
     /// Focusable elements.
     #[allow(unused)]
     pub(crate) focusable: Vec<FocusableNode>,
+    /// The focused element.
+    pub(crate) focused_element: Option<usize>,
+    /// Whether or not the widget should fully rerender.
+    pub(crate) should_rerender: bool,
 }
 
 impl Default for DurfWidgetState {
@@ -27,6 +31,8 @@ impl Default for DurfWidgetState {
             buf: ratatui::buffer::Buffer::empty(Rect::default()),
             rendered_area: Rect::new(0, 0, 0, 0),
             focusable: Vec::new(),
+            focused_element: None,
+            should_rerender: true,
         }
     }
 }
@@ -40,6 +46,7 @@ impl DurfWidgetState {
                 .min(self.scrollbar_height());
         } else {
             self.scroll = self.scroll.saturating_sub(lines.abs() as usize);
+            self.should_rerender = true;
         }
     }
 
@@ -53,7 +60,16 @@ impl DurfWidgetState {
 #[allow(unused)]
 pub(crate) struct FocusableNode {
     /// Node index of element, counted recursively.
-    offset: usize,
-    /// Scroll height of element.
-    height: usize,
+    pub(crate) index: usize,
+    /// Rect of node, relative to the full buf (not rendered).
+    pub(crate) rect: Vec<Rect>,
+}
+
+impl FocusableNode {
+    pub(crate) fn new(index: usize) -> Self {
+        Self {
+            index,
+            rect: Vec::new(),
+        }
+    }
 }

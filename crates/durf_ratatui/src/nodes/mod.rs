@@ -30,19 +30,34 @@ impl<'a> Widget for DurfNodeWidget<'a> {
         match &**self.node {
             durf_parser::RawNode::Empty => {
                 // Empty does not render.
+                self.ctx.index += 1;
             }
             durf_parser::RawNode::Text(text) => {
-                let line =
-                    ratatui::text::Line::from_iter(text.fragments.iter().map(|f| frag_to_span(f)));
-                // let line = ratatui::widgets::Paragraph::from(
-                //     text.fragments.iter().map(|f| frag_to_span(f)),
-                // );
-                // line.width();
-                // let paragraph = ratatui::widgets::Paragraph::from(line);
-                // line.render(area, buf);
-                // let text = ratatui::text::Text::from_iter(&[line]);
+                let mut total_text_len = 0usize;
+                let line = ratatui::text::Line::from_iter(text.fragments.iter().map(|f| {
+                    let mut span = frag_to_span(f);
+                    if let Some(index) = self.state.focused_element {
+                        if index == self.ctx.index {
+                            span = span.bg(Color::Black).fg(Color::White);
+                        }
+                    }
+                    if let Some(_) = &f.attributes.link {
+                        span = span.underlined();
+                        let mut focus = FocusableNode::new(self.ctx.index);
+                        {
+                            // Add rects for focus.
+                            // TODO: Calculate more intelligently than starting line
+                            // number.
+                            let line: u16 = (total_text_len as u16).div_euclid(area.width) + area.y;
+                            focus.rect.push(Rect::new(area.x, line, area.width, 1));
+                        }
+                        self.state.focusable.push(focus);
+                    }
+                    self.ctx.index += 1;
+                    total_text_len += span.content.len();
+                    span
+                }));
                 let text = ratatui::text::Text::from(vec![line]);
-                // let p = Paragraph::from(text.fragments.iter().map(|f| frag_to_span(f)));
                 let p = Paragraph::new(text).wrap(Wrap { trim: false });
                 p.render(area, buf);
             }
@@ -85,6 +100,8 @@ impl<'a> Widget for DurfNodeWidget<'a> {
                         .saturating_sub(max_rendered_height as u16);
                     inner_block.y = inner_block.y.saturating_add(max_rendered_height as u16);
                 }
+
+                self.ctx.index += 1;
             }
         }
     }

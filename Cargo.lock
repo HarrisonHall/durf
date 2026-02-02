@@ -494,6 +494,7 @@ dependencies = [
  "durf_parser",
  "ratatui",
  "test-log",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
 ]

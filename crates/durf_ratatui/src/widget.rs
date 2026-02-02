@@ -18,6 +18,24 @@ impl<'a> DurfWidget<'a> {
     ) -> Self {
         Self { ast, state, style }
     }
+
+    pub fn handle_click(&mut self, pos: Position) -> Option<DurfEvent> {
+        for focusable in &self.state.focusable {
+            for rect in &focusable.rect {
+                if rect.contains(pos) {
+                    self.state.focused_element = Some(focusable.index);
+                    self.state.should_rerender = true;
+                    // return Some(DurfEvent::FollowLink()))
+                    return None;
+                }
+            }
+        }
+        if self.state.focused_element.is_some() {
+            self.state.focused_element = None;
+            self.state.should_rerender = true;
+        }
+        None
+    }
 }
 
 impl<'a> Widget for DurfWidget<'a> {
@@ -26,13 +44,15 @@ impl<'a> Widget for DurfWidget<'a> {
         Self: Sized,
     {
         // Re-render if width changes.
-        if area.width != self.state.rendered_area.width {
+        self.state.should_rerender |= area.width != self.state.rendered_area.width;
+        if self.state.should_rerender {
             // Render the full widget/buffer.
             let total_height = self.ast.root.height(area, self.style);
             let full_content_area = Rect::new(0, 0, area.width, total_height as u16);
             let mut full_buf = Buffer::empty(full_content_area.clone());
 
             let mut ctx = DurfNodeWidgetContext::new(&self.state);
+            self.state.focusable.clear();
 
             let widget = DurfNodeWidget {
                 node: &self.ast.root,
@@ -43,6 +63,7 @@ impl<'a> Widget for DurfWidget<'a> {
             widget.render(full_content_area, &mut full_buf);
             self.state.rendered_area = area.clone();
             self.state.buf = full_buf;
+            self.state.should_rerender = false;
         }
 
         // Render to the rect.
@@ -91,6 +112,8 @@ pub(crate) struct DurfNodeWidgetContext {
     /// Total height rendered so far.
     #[allow(unused)]
     pub(crate) height: usize,
+    /// Widget index.
+    pub(crate) index: usize,
 }
 
 impl DurfNodeWidgetContext {
@@ -98,6 +121,11 @@ impl DurfNodeWidgetContext {
         Self {
             offset: state.scroll,
             height: 0,
+            index: 0,
         }
     }
+}
+
+pub enum DurfEvent {
+    FollowLink(String),
 }
