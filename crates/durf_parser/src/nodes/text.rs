@@ -191,13 +191,16 @@ impl TextAttributes {
         if self.italic {
             return false;
         }
-        if let Some(_) = self.heading {
+        if self.heading.is_some() {
             return false;
         }
-        if let Some(_) = self.link {
+        if self.link.is_some() {
             return false;
         }
-        if let Some(_) = self.tooltip {
+        if self.tooltip.is_some() {
+            return false;
+        }
+        if self.annotation.is_some() {
             return false;
         }
 

@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "durf_parser"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "scraper",
  "serde",
@@ -487,7 +487,7 @@ dependencies = [
 
 [[package]]
 name = "durf_ratatui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "color-eyre",
  "crossterm 0.29.0",
