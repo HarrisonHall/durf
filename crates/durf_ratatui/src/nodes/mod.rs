@@ -41,9 +41,10 @@ impl<'a> Widget for DurfNodeWidget<'a> {
                             span = span.bg(Color::Black).fg(Color::White);
                         }
                     }
-                    if let Some(_) = &f.attributes.link {
+                    if let Some(link) = &f.attributes.link {
                         span = span.underlined();
                         let mut focus = FocusableNode::new(self.ctx.index);
+                        focus.event = Some(DurfEvent::FollowLink(link.clone()));
                         {
                             // Add rects for focus.
                             // TODO: Calculate more intelligently than starting line

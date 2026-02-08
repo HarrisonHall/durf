@@ -1,7 +1,7 @@
 [package]
 name = "durf_ratatui"
 description = "Ratatui widget for Durf."
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 authors.workspace = true
 keywords.workspace = true
@@ -22,7 +22,7 @@ test-log = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-durf_parser = { path = "../durf_parser", version = "0.2.3" }
+durf_parser = { path = "../durf_parser", version = "0.2.4" }
 
 crossterm = { version = "0.29", optional = true }
 

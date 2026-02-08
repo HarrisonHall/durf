@@ -63,6 +63,8 @@ pub(crate) struct FocusableNode {
     pub(crate) index: usize,
     /// Rect of node, relative to the full buf (not rendered).
     pub(crate) rect: Vec<Rect>,
+    /// Event for node.
+    pub(crate) event: Option<DurfEvent>,
 }
 
 impl FocusableNode {
@@ -70,6 +72,7 @@ impl FocusableNode {
         Self {
             index,
             rect: Vec::new(),
+            event: None,
         }
     }
 }

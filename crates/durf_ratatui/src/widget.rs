@@ -25,8 +25,9 @@ impl<'a> DurfWidget<'a> {
                 if rect.contains(pos) {
                     self.state.focused_element = Some(focusable.index);
                     self.state.should_rerender = true;
-                    // return Some(DurfEvent::FollowLink()))
-                    return None;
+                    if let Some(event) = &focusable.event {
+                        return Some(event.clone());
+                    }
                 }
             }
         }
@@ -126,6 +127,7 @@ impl DurfNodeWidgetContext {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum DurfEvent {
     FollowLink(String),
 }
